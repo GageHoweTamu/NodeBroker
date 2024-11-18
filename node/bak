@@ -1,0 +1,135 @@
+package main
+
+// build with `go build -ldflags="-s -w" -trimpath -o build` to ensure hardening
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"os"
+	"runtime"
+
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/client"
+	"github.com/docker/docker/pkg/stdcopy"
+)
+
+// enforceRuntime ensures the container is using gVisor
+func enforceRuntime(hostConfig *container.HostConfig) error {
+	if hostConfig == nil {
+		return fmt.Errorf("security violation: host config cannot be nil")
+	}
+	if hostConfig.Runtime != "runsc" {
+		return fmt.Errorf("security violation: must use gVisor runtime (runsc)")
+	}
+	return nil
+}
+
+// verifyGvisorInstallation checks if gVisor is properly installed
+func verifyGvisorInstallation(cli *client.Client) error {
+	// Check if runsc binary exists and is executable
+	if _, err := os.Stat("/usr/local/bin/runsc"); err != nil {
+		return fmt.Errorf("gVisor runtime (runsc) not found in /usr/local/bin/runsc")
+	}
+
+	// Verify runtime in Docker
+	info, err := cli.Info(context.Background())
+	if err != nil {
+		return fmt.Errorf("failed to get Docker info: %v", err)
+	}
+
+	runtime, exists := info.Runtimes["runsc"]
+	if !exists {
+		return fmt.Errorf("runsc runtime not configured in Docker")
+	}
+
+	// Verify runtime path matches
+	if runtime.Path != "/usr/local/bin/runsc" {
+		return fmt.Errorf("runsc runtime path mismatch")
+	}
+
+	return nil
+}
+
+func main() {
+
+	ctx := context.Background()
+
+	if runtime.GOOS != "linux" {
+		panic("This program must run on Linux")
+	}
+
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	if err != nil {
+		panic(err)
+	}
+	defer cli.Close()
+
+	reader, err := cli.ImagePull(ctx, "docker.io/library/alpine", image.PullOptions{})
+	if err != nil {
+		panic(err)
+	}
+	io.Copy(os.Stdout, reader)
+
+	// Create container with gVisor runtime
+	resp, err := cli.ContainerCreate(
+		ctx,
+		&container.Config{
+			Image: "alpine",
+			Cmd:   []string{"echo", "hello world"},
+		},
+		&container.HostConfig{
+			Runtime: "runsc",
+		},
+		nil,
+		nil,
+		"",
+	)
+
+	/*
+		To run the container with the gVisor runtime, you need to have the gVisor runtime installed on your machine.
+		/etc/docker/daemon.json
+
+		{
+			{
+		    "runtimes": {
+		        "runsc": {
+		            "path": "/usr/local/bin/runsc"
+		        }
+		    }
+		}
+	*/
+
+	// Enforce runtime configuration
+	if err := enforceRuntime(hostConfig); err != nil {
+		panic(err)
+	}
+
+	// Verify container runtime before starting
+	if err := verifyContainerRuntime(ctx, cli, resp.ID); err != nil {
+		// If verification fails, remove the container and panic
+		cli.ContainerRemove(ctx, resp.ID, container.RemoveOptions{Force: true})
+		panic(err)
+	}
+
+	if err := cli.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
+		panic(err) // this will panic if gvisor/runsc is not installed/configured as the Docker runtime
+	}
+
+	statusCh, errCh := cli.ContainerWait(ctx, resp.ID, container.WaitConditionNotRunning)
+	select {
+	case err := <-errCh:
+		if err != nil {
+			panic(err)
+		}
+	case <-statusCh:
+	}
+
+	out, err := cli.ContainerLogs(ctx, resp.ID, container.LogsOptions{ShowStdout: true})
+	if err != nil {
+		panic(err)
+	}
+
+	stdcopy.StdCopy(os.Stdout, os.Stderr, out)
+}
