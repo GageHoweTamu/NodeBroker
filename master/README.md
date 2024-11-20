@@ -1,6 +1,6 @@
 # master
 
-This is the master server. It is run in a trusted environment, and orchestrates communication and payment between nodes and users.
+This is the master server/controller. It is run in a trusted environment, and orchestrates communication and payment between worker nodes and users.
 
 To enable etherium transactios, make sure to have geth running:
 
