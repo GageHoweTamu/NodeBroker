@@ -1,34 +1,51 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
+	"log"
 
 	"github.com/labstack/echo/v4"
+	_ "github.com/mattn/go-sqlite3" // _ means the package is imported for its side-effects only
 )
 
-type job struct {
-    id   int
-    name string
+func check(err error) {
+	if err != nil {
+		log.Fatal(err)
+	}
 }
 
-// Modified to match echo.HandlerFunc signature
+type user struct {
+	id         string
+	email      string
+	ip_addr    string
+	reputation string
+}
+
+// type job struct {
+// 	id   int
+// 	name string
+// }
+
 func receive_job(c echo.Context) error {
-    // Add your job handling logic here
-    return c.String(200, "Job received")
+	//handle job logic
+	return c.String(200, "Job received")
 }
 
 func main() {
-    server := echo.New()
-    x := 0
+	server := echo.New()
+	db, err := sql.Open("sqlite3", "./names.db")
+	check(err)
+	fmt.Printf("db: %v", db)
+	x := 0
 
-    server.GET("/", func(c echo.Context) error {
-        x++
-        fmt.Printf("%dth call to / route\n", x)
-        return c.String(200, "Server is running! Paths: GET /, POST /jobs")
-    })
+	server.GET("/", func(c echo.Context) error {
+		x++
+		fmt.Printf("%dth call to / route\n", x)
+		return c.String(200, "Server is running! Paths: GET /, POST /jobs")
+	})
 
-    // Move this before server.Start()
-    server.POST("/receive-job", receive_job)
+	server.POST("/receive-job", receive_job)
 
-    server.Logger.Fatal(server.Start(":8080"))
+	server.Logger.Fatal(server.Start(":8080"))
 }
